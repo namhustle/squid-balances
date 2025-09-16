@@ -1,0 +1,20 @@
+{
+  "outDir": "src/types",
+  "specVersions": "https://v2.archive.subsquid.io/metadata/kusama",
+  "pallets": {
+    "Balances": {
+      "events": [
+        "Transfer"
+      ],
+      "calls": [],
+      "storage": ["Account"],
+      "constants": []
+    },
+    "System": {
+      "events": [],
+      "calls": [],
+      "storage": ["Account"],
+      "constants": []
+    }
+  }
+}

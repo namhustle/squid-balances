@@ -8,6 +8,6 @@
 # IDE files
 /.idea
 
-./.env
+.env
 
 ./migrations

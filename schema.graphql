@@ -1,7 +1,19 @@
 type Account @entity {
-    id: ID!
+    id: ID! # public key hex 0x...
+    address: String! @index # ss58 Kusama address
     free: BigInt!
     reserved: BigInt!
-    total: BigInt!
-    updatedAt: BigInt!
+    frozen: BigInt!
+
+    outgoingTransfers: [Transfer!]! @derivedFrom(field: "from")
+    incomingTransfers: [Transfer!]! @derivedFrom(field: "to")
+}
+
+type Transfer @entity {
+    id: ID! # sqd event id e.g. 0030135643-636b1-000034 (format {block height}-{block prefix hash}-{event index})
+    blockHash: String! @index
+    from: Account!
+    to: Account!
+    amount: BigInt!
+    fee: BigInt
 }

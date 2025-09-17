@@ -1,54 +1,99 @@
 import {TypeormDatabase} from '@subsquid/typeorm-store'
-import {processor} from './processor'
-import {Account} from './model'
+import {createProcessor} from './processor'
 import {events, storage} from './types'
 import * as ss58 from '@subsquid/ss58'
+import {Account, Transfer} from "./model"
 
-processor.run(new TypeormDatabase({supportHotBlocks: true}), async (ctx) => {
-    const accounts = new Map<string, Account>()
+async function main() {
+    const processor = await createProcessor(1000)
+    processor.run(new TypeormDatabase(), async (ctx) => {
+        for (let block of ctx.blocks) {
+            for (let event of block.events) {
+                if (event.name === 'Balances.Transfer') {
+                    try {
+                        // Decode transfer event
+                        let decoded: any
+                        if (block.header.specVersion >= 9130) {
+                            decoded = events.balances.transfer.v9130.decode(event)
+                        } else if (block.header.specVersion >= 1050) {
+                            decoded = events.balances.transfer.v1050.decode(event)
+                        } else {
+                            decoded = events.balances.transfer.v1020.decode(event)
+                        }
 
-    console.log(`Processing ${ctx.blocks.length} blocks`)
+                        // Extract from/to addresses
+                        let fromPublicKey: Uint8Array, toPublicKey: Uint8Array
+                        if (block.header.specVersion >= 9130) {
+                            fromPublicKey = decoded.from
+                            toPublicKey = decoded.to
+                        } else {
+                            fromPublicKey = decoded[0]
+                            toPublicKey = decoded[1]
+                        }
 
-    for (let block of ctx.blocks) {
-        console.log(`Block ${block.header.height}: ${block.events.length} events`)
+                        // Encode addresses to KSM format
+                        const fromKSMAddress = ss58.codec('kusama').encode(fromPublicKey)
+                        const toKSMAddress = ss58.codec('kusama').encode(toPublicKey)
 
-        for (let event of block.events) {
-            if (event.name === events.balances.transfer.name) {
-                // Decode transfer event
-                const rec = events.balances.transfer.v9130.decode(event)
-                
-                const from = rec.from
-                const to = rec.to
-                const fromId = ss58.codec('kusama').encode(from)
-                const toId = ss58.codec('kusama').encode(to)
+                        // Query account balances (handle multiple spec versions)
+                        let fromBalance: any, toBalance: any
+                        if (storage.system.account.v9420.is(block.header)) {
+                            fromBalance = await storage.system.account.v9420.get(block.header, fromPublicKey.toString())
+                            toBalance = await storage.system.account.v9420.get(block.header, toPublicKey.toString())
+                        } else if (storage.system.account.v2030.is(block.header)) {
+                            fromBalance = await storage.system.account.v2030.get(block.header, fromPublicKey.toString())
+                            toBalance = await storage.system.account.v2030.get(block.header, toPublicKey.toString())
+                        } else if (storage.system.account.v2028.is(block.header)) {
+                            fromBalance = await storage.system.account.v2028.get(block.header, fromPublicKey.toString())
+                            toBalance = await storage.system.account.v2028.get(block.header, toPublicKey.toString())
+                        } else if (storage.system.account.v1050.is(block.header)) {
+                            fromBalance = await storage.system.account.v1050.get(block.header, fromPublicKey.toString())
+                            toBalance = await storage.system.account.v1050.get(block.header, toPublicKey.toString())
+                        } else {
+                            console.log(`⚠️ No storage version for spec ${block.header.specVersion}`)
+                        }
 
-                // Get actual balances from storage
-                const fromBalance = await storage.system.account.v2030.get(block.header, from)
-                const toBalance = await storage.system.account.v2030.get(block.header, to)
+                        // Upsert accounts to DB
+                        if (fromBalance?.data) {
+                            await ctx.store.upsert(new Account({
+                                id: fromPublicKey.toString(),
+                                address: fromKSMAddress,
+                                free: fromBalance.data.free || 0n,
+                                reserved: fromBalance.data.reserved || 0n,
+                                frozen: fromBalance.data.frozen || 0n,
+                            }))
+                        }
+                        if (toBalance?.data) {
+                            await ctx.store.upsert(new Account({
+                                id: toPublicKey.toString(),
+                                address: toKSMAddress,
+                                free: toBalance.data.free || 0n,
+                                reserved: toBalance.data.reserved || 0n,
+                                frozen: toBalance.data.frozen || 0n,
+                            }))
+                        }
 
-                // Update from account
-                let fromAccount = accounts.get(fromId) || new Account({
-                    id: fromId,
-                    free: fromBalance?.data.free || 0n,
-                    reserved: fromBalance?.data.reserved || 0n,
-                    total: (fromBalance?.data.free || 0n) + (fromBalance?.data.reserved || 0n),
-                    updatedAt: BigInt(block.header.timestamp!)
-                })
-                accounts.set(fromId, fromAccount)
-
-                // Update to account
-                let toAccount = accounts.get(toId) || new Account({
-                    id: toId,
-                    free: toBalance?.data.free || 0n,
-                    reserved: toBalance?.data.reserved || 0n,
-                    total: (toBalance?.data.free || 0n) + (toBalance?.data.reserved || 0n),
-                    updatedAt: BigInt(block.header.timestamp!)
-                })
-                accounts.set(toId, toAccount)
+                        // Upsert transfers to DB
+                        if (fromBalance && toBalance) {
+                            await ctx.store.upsert(new Transfer({
+                                id: event.id,
+                                blockHash: block.header.hash.toString(),
+                                from: new Account({ id: fromPublicKey.toString() }),
+                                to: new Account({ id: toPublicKey.toString() }),
+                                amount: decoded.amount,
+                                fee: event.extrinsic?.fee,
+                            }))
+                        }
+                    } catch (error) {
+                        console.error('❌ Error processing transfer:', error)
+                    }
+                }
             }
         }
-    }
-    console.log(`Upserting ${accounts.size} accounts`)
-    console.log(accounts.values())
-    await ctx.store.upsert([...accounts.values()])
+    })
+}
+
+main().catch(err => {
+    console.error('❌ Fatal error:', err)
+    process.exit(1)
 })

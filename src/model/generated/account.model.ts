@@ -1,4 +1,5 @@
-import {Entity as Entity_, Column as Column_, PrimaryColumn as PrimaryColumn_, BigIntColumn as BigIntColumn_} from "@subsquid/typeorm-store"
+import {Entity as Entity_, PrimaryColumn as PrimaryColumn_, StringColumn as StringColumn_, Index as Index_, BigIntColumn as BigIntColumn_, OneToMany as OneToMany_} from "@subsquid/typeorm-store"
+import {Transfer} from "./transfer.model"
 
 @Entity_()
 export class Account {
@@ -9,6 +10,10 @@ export class Account {
     @PrimaryColumn_()
     id!: string
 
+    @Index_()
+    @StringColumn_({nullable: false})
+    address!: string
+
     @BigIntColumn_({nullable: false})
     free!: bigint
 
@@ -16,8 +21,11 @@ export class Account {
     reserved!: bigint
 
     @BigIntColumn_({nullable: false})
-    total!: bigint
+    frozen!: bigint
 
-    @BigIntColumn_({nullable: false})
-    updatedAt!: bigint
+    @OneToMany_(() => Transfer, e => e.from)
+    outgoingTransfers!: Transfer[]
+
+    @OneToMany_(() => Transfer, e => e.to)
+    incomingTransfers!: Transfer[]
 }
